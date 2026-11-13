@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { DAYTIMES, WEATHERS, bubbleLine, buildScene, daytimeFor, weatherFor } from './hooks/chiikawa-friends.mjs'
+import { DAYTIMES, WEATHERS, bubbleLine, buildScene, daytimeFor, isLeavingTime, weatherFor } from './hooks/chiikawa-friends.mjs'
 
 const BAND = {
   plugin: 'chiikawa-friends',
@@ -305,6 +305,66 @@ test('near the edge of the field the thought slides inward', () => {
   expect(slide?.[1].split(';').some(value => Number(value.split(' ')[0]) !== 0)).toBe(true)
 })
 
+// November 2026: the 13th is a Friday, the 14th and 15th the weekend, the 16th a Monday.
+const leavingAt = (day, hour, minute) => isLeavingTime(new Date(2026, 10, day, hour, minute))
+
+test('weekdays from 17:50 until six are the time to get ready to leave', () => {
+  expect(leavingAt(13, 17, 49)).toBe(false)
+  expect(leavingAt(13, 17, 50)).toBe(true)
+  expect(leavingAt(13, 17, 59)).toBe(true)
+  expect(leavingAt(13, 18, 0)).toBe(false)
+  expect(leavingAt(14, 17, 55)).toBe(false)
+  expect(leavingAt(15, 17, 55)).toBe(false)
+  expect(leavingAt(16, 17, 55)).toBe(true)
+})
+
+// One character's part of the image, from its name to the next character's.
+const castGroup = (source, name) => {
+  const start = source.indexOf(`<title>${name}</title>`)
+  const end = source.indexOf('<g transform="translate(0 104)">', start)
+
+  return source.slice(start, end === -1 ? undefined : end)
+}
+const LEAVING_LINES = { 하치와레: '퇴근 준비하자~!', 쿠리만쥬: '퇴근하고 한잔~', 모몽가: '퇴근해!', 랏코: '오늘 수련은 끝이다' }
+
+test('at leaving time four of them take turns telling you to get ready, and the other two play on', () => {
+  const plain = buildScene(42, 800)
+  const leaving = buildScene(42, 800, { isLeaving: true })
+  const turns = Object.entries(LEAVING_LINES).map(([name, line]) => {
+    const group = castGroup(leaving, name)
+    const turn = /<animate attributeName="opacity" calcMode="discrete" values="([^"]+)" keyTimes="([^"]+)" dur="20s"/.exec(group)
+
+    expect(group).toContain(`>${line}</text>`)
+    // Its own lines rest meanwhile: the one bubble is the reminder. (A bubble's
+    // words are placed by y alone; the z, hearts and sparkles also take an x.)
+    expect(group.match(/<text y=/g)?.length).toBe(1)
+    expect(turn?.[1].split(';').length).toBe(turn?.[2].split(';').length)
+    expect(turn?.[2].split(';')[0]).toBe('0')
+
+    return turn?.[2]
+  })
+
+  expect(new Set(turns).size).toBe(4)
+  for (const name of ['치이카와', '우사기']) {
+    expect(castGroup(leaving, name)).toBe(castGroup(plain, name))
+  }
+  expect(plain).not.toContain('퇴근')
+})
+
+test('a reminder near the edge of the field slides inward rather than going unsaid', () => {
+  const rakko = castGroup(buildScene(42, 360, { isLeaving: true }), '랏코')
+
+  expect(rakko).toContain('>오늘 수련은 끝이다</text>')
+})
+
+test('while Claude works Hachiware keeps to the work, and the others still remind', () => {
+  const source = buildScene(42, 800, { isLeaving: true, thought: '설정 볼까' })
+
+  expect(castGroup(source, '하치와레')).toContain('설정 볼까')
+  expect(castGroup(source, '하치와레')).not.toContain('퇴근')
+  expect(castGroup(source, '모몽가')).toContain('>퇴근해!</text>')
+})
+
 test('a new sky picks the play up where it was', () => {
   const source = buildScene(42, 800, { weather: WEATHERS[3], startAt: 30 })
   const walk = /<animateTransform attributeName="transform" type="translate" keyTimes[^>]*>/.exec(source)?.[0]
@@ -422,6 +482,38 @@ test('the sun is drawn where the hour of the draw has brought it', async ($, on)
   const sun = crossingOf(String((await ui.find({ type: 'Svg' }))?.props.source), 'sun')
 
   expect(sun?.since).toBe(10 * 3600)
+  await ui.unmount()
+})
+
+test('the reminders start at 17:50 on a weekday and stop at six', async ($, on) => {
+  let now = new Date(2026, 10, 13, 17, 45).getTime()
+  let fireTimer = () => {}
+
+  engineBand(on, () => now)
+  engineSession(
+    on,
+    () => 10,
+    () => new Promise(resolve => (fireTimer = () => resolve({ value: undefined }))),
+  )
+
+  await $.session.start(SESSION)
+
+  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+  const svg = async () => (await ui.find({ type: 'Svg' }))?.props
+  const tick = async at => {
+    now = at
+    fireTimer()
+    await new Promise(resolve => setTimeout(resolve, 20))
+  }
+
+  expect(String((await svg())?.source)).not.toContain('퇴근')
+
+  await tick(new Date(2026, 10, 13, 17, 50).getTime())
+  expect(String((await svg())?.source)).toContain('>퇴근해!</text>')
+  expect(String((await svg())?.alt)).toContain('퇴근')
+
+  await tick(new Date(2026, 10, 13, 18, 0).getTime())
+  expect(String((await svg())?.source)).not.toContain('퇴근')
   await ui.unmount()
 })
 

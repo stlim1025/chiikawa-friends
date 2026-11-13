@@ -6,7 +6,8 @@
 // $.session.usage(). The sky follows it, in the bands of WEATHERS.
 // session.start, then each minute: read the local hour. The sky's light follows
 // it, in the parts of DAYTIMES; the sun and the moon cross the sky by the time
-// of day, moved along by the image itself.
+// of day, moved along by the image itself. On weekdays from 17:50 until six,
+// four of the friends take turns telling you to get ready to leave work.
 // session.compact: clear the sky, with a rainbow that fades by itself.
 // turn.step: listen to what the main loop thinks and writes, passing every
 // chunk on as it came. While a turn runs, a timer has a small model put what
@@ -234,6 +235,29 @@ const ARC = { edge: 30, top: 26, low: HEIGHT, steps: 24 };
 export const daytimeFor = (hour) =>
   DAYTIMES.findLast((daytime) => hour >= daytime.from) ?? DAYTIMES[DAYTIMES.length - 1];
 
+// On weekdays, from minute `from` of the day until minute `until`, four of the
+// friends take turns telling you to get ready to leave work: each in its `turn`
+// seconds of a `round`, saying its line for `say` of them, in this order.
+const LEAVING = {
+  from: 17 * 60 + 50,
+  until: 18 * 60,
+  round: 20,
+  turn: 5,
+  say: 4,
+  lines: [
+    ["hachiware", "퇴근 준비하자~!"],
+    ["kurimanju", "퇴근하고 한잔~"],
+    ["momonga", "퇴근해!"],
+    ["rakko", "오늘 수련은 끝이다"],
+  ],
+};
+
+export const isLeavingTime = (date) => {
+  const minute = date.getHours() * 60 + date.getMinutes();
+  const isWeekday = date.getDay() >= 1 && date.getDay() <= 5;
+  return isWeekday && minute >= LEAVING.from && minute < LEAVING.until;
+};
+
 const MINUTE = 60000;
 const RAINBOW_SECONDS = 45;
 const RAINBOW_COLORS = ["#ff6b6b", "#ffa94d", "#ffe066", "#69db7c", "#4dabf7", "#b197fc"];
@@ -242,6 +266,7 @@ let seed = 20261106;
 let startedAt = 0;
 let weather = WEATHERS[0];
 let daytime = DAYTIMES[1];
+let isLeaving = false;
 let rainbowAt = 0;
 let dayTimer = null;
 // Whether the meadow is on screen: only then is another mod's redraw followed.
@@ -384,7 +409,8 @@ export function register(on) {
     // character. Drawn as an image, the Svg keeps its frames and SMIL still runs.
     const source = await sceneFor($, e.props.bodyColumns);
     const said = thought ? `, 하치와레의 말: ${thought}` : "";
-    const children = [Svg({ source, alt: `${ALT}, ${daytime.word} 하늘은 ${weather.word}${said}` })];
+    const leaving = isLeaving ? ", 퇴근 준비할 시간" : "";
+    const children = [Svg({ source, alt: `${ALT}, ${daytime.word} 하늘은 ${weather.word}${leaving}${said}` })];
     if (theirs) {
       children.push(theirs);
     }
@@ -462,9 +488,12 @@ async function readWeather($) {
 }
 
 async function readDaytime($) {
-  const found = daytimeFor(new Date(await $.clock.now()).getHours());
-  if (found !== daytime) {
+  const date = new Date(await $.clock.now());
+  const found = daytimeFor(date.getHours());
+  const leaving = isLeavingTime(date);
+  if (found !== daytime || leaving !== isLeaving) {
     daytime = found;
+    isLeaving = leaving;
     $.ui.invalidate("ui.render");
   }
 }
@@ -477,7 +506,7 @@ async function sceneFor($, bodyColumns) {
   const now = await $.clock.now();
   // The engine can ask twice for one redraw: within a moment it is the one image,
   // since a second would be a second load on screen for nothing.
-  const key = `${seed}:${width}:${weather.word}:${daytime.word}:${rainbowAt}:${thought}`;
+  const key = `${seed}:${width}:${weather.word}:${daytime.word}:${isLeaving}:${rainbowAt}:${thought}`;
   if (lately.key === key && now >= lately.at && now - lately.at < MOMENT) {
     return lately.source;
   }
@@ -492,6 +521,7 @@ async function sceneFor($, bodyColumns) {
     startAt: Math.max(0, now - startedAt) / 1000,
     rainbowAge: rainbowAt && rainbowAge < RAINBOW_SECONDS ? rainbowAge : undefined,
     thought,
+    isLeaving,
   };
   // A plan past Svg's limit wouldn't draw, so a busy one gives way to another.
   let source = buildScene(seed, width, sky);
@@ -506,9 +536,14 @@ export function buildScene(sceneSeed, width, sky = {}) {
   const rng = mulberry32(sceneSeed);
   const scenes = planScenes(rng);
   const timing = looping((sky.startAt ?? 0) % LOOP);
-  const actors = CAST.map((c) =>
-    actorSvg(c, planActor(c, scenes, rng), timing, width, c.id === "hachiware" ? sky.thought : undefined),
-  );
+  // The reminders' round carries on from startAt too, so a redraw keeps the turns.
+  const round = `dur="${LEAVING.round}s" begin="-${((sky.startAt ?? 0) % LEAVING.round).toFixed(1)}s" repeatCount="indefinite"`;
+  const actors = CAST.map((c) => {
+    const plan = planActor(c, scenes, rng);
+    const slot = sky.isLeaving ? LEAVING.lines.findIndex(([id]) => id === c.id) : -1;
+    const leaving = slot < 0 ? undefined : { text: LEAVING.lines[slot][1], slot, round };
+    return actorSvg(c, plan, timing, width, c.id === "hachiware" ? sky.thought : undefined, leaving);
+  });
   return (
     `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${HEIGHT}" viewBox="0 0 ${width} ${HEIGHT}"` +
     ` font-family="Malgun Gothic, Apple SD Gothic Neo, Noto Sans KR, sans-serif">` +
@@ -723,7 +758,7 @@ function discreteAnimate(attrs, points, timing) {
   return `<${attrs} calcMode="discrete" keyTimes="${keyTimes}" values="${values}" ${timing}/>`;
 }
 
-function actorSvg(c, plan, timing, width, thought) {
+function actorSvg(c, plan, timing, width, thought, leaving) {
   // Where the plan's places fall on a field this wide.
   const segments = plan.segments.map((s) => ({ ...s, x0: s.at0(width), x1: s.at1(width) }));
   // None of its own lines where the bubble would hang off this field.
@@ -753,7 +788,11 @@ function actorSvg(c, plan, timing, width, thought) {
     `<animateTransform attributeName="transform" type="translate" keyTimes="${walk.keyTimes}" values="${walk.values}" ${timing}/>` +
     `<ellipse cx="0" cy="1" rx="15" ry="2.6" fill="#6aa35a" opacity=".28"/>` +
     `<g>${discreteAnimate(`animateTransform attributeName="transform" type="scale"`, faces, timing)}${poses.join("")}</g>` +
-    (thought ? thoughtSvg(c, segments, thought, width, timing) : bubblesSvg(c, bubbles, timing)) +
+    (thought
+      ? thoughtSvg(c, segments, thought, width, timing)
+      : leaving
+        ? leavingSvg(c, segments, leaving, width, timing)
+        : bubblesSvg(c, bubbles, timing)) +
     `</g></g>`
   );
 }
@@ -803,6 +842,19 @@ function thoughtSvg(c, segments, text, width, timing) {
     `<g><animateTransform attributeName="transform" type="translate" keyTimes="${slide.keyTimes}" values="${slide.values}" ${timing}/>` +
     `<rect x="${-w / 2}" y="${bottom - 18}" width="${w}" height="18" rx="8" fill="#fff" stroke="${INK}"/>` +
     `<text y="${bottom - 5}" font-size="12" text-anchor="middle" fill="${INK}">${escapeXml(text)}</text></g>`
+  );
+}
+
+// A reminder to leave, shown in its own turn of the round and hidden the rest of
+// it, kept inside the field the way a thought is.
+function leavingSvg(c, segments, { text, slot, round }, width, timing) {
+  const share = (seconds) => +(seconds / LEAVING.round).toFixed(4);
+  const from = share(slot * LEAVING.turn);
+  const to = share(slot * LEAVING.turn + LEAVING.say);
+  const shown = from === 0 ? `values="1;0" keyTimes="0;${to}"` : `values="0;1;0" keyTimes="0;${from};${to}"`;
+  return (
+    `<g opacity="0"><animate attributeName="opacity" calcMode="discrete" ${shown} ${round}/>` +
+    `${thoughtSvg(c, segments, text, width, timing)}</g>`
   );
 }
 
