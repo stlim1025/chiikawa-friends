@@ -185,6 +185,61 @@ test('the part of the day follows the local hour', () => {
   expect(wordAt(23)).toBe('밤')
 })
 
+// The sun or the moon on its way across: where it stands as drawn, the whole
+// path it moves along by itself, and how far along that path it already is.
+const crossingOf = (source, id) => {
+  const found = new RegExp(
+    `<g id="${id}" transform="translate\\(([^)]+)\\)"><animateTransform attributeName="transform" type="translate" values="([^"]+)" dur="(\\d+)s" begin="-(\\d+)s" fill="freeze"/>`,
+  ).exec(source)
+
+  return found && { at: found[1], path: found[2].split(';'), dur: Number(found[3]), since: Number(found[4]) }
+}
+const at = (hour, minute = 0) => ({ daytime: daytimeFor(hour), secondOfDay: hour * 3600 + minute * 60 })
+
+test('the sun rises on the left at five, stands highest at noon and sets on the right at seven', () => {
+  const dawn = crossingOf(buildScene(42, 800, at(5)), 'sun')
+  const noon = crossingOf(buildScene(42, 800, at(12)), 'sun')
+  const dusk = crossingOf(buildScene(42, 800, at(18, 59)), 'sun')
+
+  expect(dawn?.dur).toBe(14 * 3600)
+  expect(dawn?.since).toBe(0)
+  expect(dawn?.at).toBe('30 116')
+  expect(noon?.since).toBe(7 * 3600)
+  expect(noon?.at).toBe('400 26')
+  expect(dusk?.since).toBe(14 * 3600 - 60)
+  // Below the hill at either end: it comes up from behind it and goes down behind it.
+  expect(noon?.path[0]).toBe('30 116')
+  expect(noon?.path[noon.path.length - 1]).toBe('770 116')
+  expect(buildScene(42, 800, at(12))).not.toContain('id="moon"')
+})
+
+test('the moon crosses the night sky, on past midnight', () => {
+  const evening = crossingOf(buildScene(42, 800, at(19)), 'moon')
+  const midnight = crossingOf(buildScene(42, 800, at(0)), 'moon')
+  const late = crossingOf(buildScene(42, 800, at(2)), 'moon')
+
+  expect(evening?.dur).toBe(10 * 3600)
+  expect(evening?.since).toBe(0)
+  expect(midnight?.since).toBe(5 * 3600)
+  expect(midnight?.at).toBe('400 26')
+  expect(late?.since).toBe(7 * 3600)
+  expect(buildScene(42, 800, at(0))).not.toContain('id="sun"')
+})
+
+test('on the narrowest field the sun keeps to the sky, and a cloudy one hides it', () => {
+  for (const hour of [5, 9, 12, 15, 18]) {
+    const sun = crossingOf(buildScene(42, 360, at(hour)), 'sun')
+
+    expect(sun.path.length > 10).toBe(true)
+    for (const point of [...sun.path, sun.at]) {
+      const [x, y] = point.split(' ').map(Number)
+
+      expect(x >= 0 && x <= 360 && y >= 0 && y <= 116).toBe(true)
+    }
+  }
+  expect(buildScene(42, 800, { ...at(12), weather: WEATHERS[1] })).not.toContain('id="sun"')
+})
+
 test('a new sky changes nothing but the sky', () => {
   const playOf = source => source.slice(source.indexOf('<g transform="translate(0 104)">'))
   const scenes = WEATHERS.flatMap(weather =>
@@ -354,6 +409,19 @@ test('the day turns to night while the app stays open', async ($, on) => {
   fireTimer()
   await new Promise(resolve => setTimeout(resolve, 20))
   expect(await alt()).toContain('밤')
+  await ui.unmount()
+})
+
+test('the sun is drawn where the hour of the draw has brought it', async ($, on) => {
+  engineBand(on, () => atHour(15))
+  engineSession(on, () => 10)
+
+  await $.session.start(SESSION)
+
+  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+  const sun = crossingOf(String((await ui.find({ type: 'Svg' }))?.props.source), 'sun')
+
+  expect(sun?.since).toBe(10 * 3600)
   await ui.unmount()
 })
 

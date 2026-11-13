@@ -5,7 +5,8 @@
 // session.start, turn.complete: read how full the context window is, from
 // $.session.usage(). The sky follows it, in the bands of WEATHERS.
 // session.start, then each minute: read the local hour. The sky's light follows
-// it, in the parts of DAYTIMES.
+// it, in the parts of DAYTIMES; the sun and the moon cross the sky by the time
+// of day, moved along by the image itself.
 // session.compact: clear the sky, with a rainbow that fades by itself.
 // turn.step: listen to what the main loop thinks and writes, passing every
 // chunk on as it came. While a turn runs, a timer has a small model put what
@@ -212,13 +213,23 @@ export const weatherFor = (percent) => WEATHERS.find((weather) => percent < weat
 
 // The part of the day by the local hour, each from `from` until the next; the
 // night runs on over midnight. `tint` is mixed into the backdrop's colours by
-// `amount`. The sun stands at height `sunY`; with no sunY, the moon is up.
+// `amount`. By day the sun is up, by night the moon.
 export const DAYTIMES = [
-  { from: 5, word: "새벽", tint: "#ff9eb5", amount: 0.22, sunY: 72 },
-  { from: 7, word: "낮", tint: "#ffffff", amount: 0, sunY: 28 },
-  { from: 17, word: "노을", tint: "#ff7a3c", amount: 0.42, sunY: 72 },
-  { from: 19, word: "밤", tint: "#0b1538", amount: 0.82 },
+  { from: 5, word: "새벽", tint: "#ff9eb5", amount: 0.22 },
+  { from: 7, word: "낮", tint: "#ffffff", amount: 0 },
+  { from: 17, word: "노을", tint: "#ff7a3c", amount: 0.42 },
+  { from: 19, word: "밤", tint: "#0b1538", amount: 0.82, isNight: true },
 ];
+
+// Each rises at `rises` seconds past midnight and is up for `up` seconds: the sun
+// from five until seven at night, the moon from seven until five in the morning.
+const DAY = 86400;
+const SUN = { id: "sun", rises: 5 * 3600, up: 14 * 3600 };
+const MOON = { id: "moon", rises: 19 * 3600, up: 10 * 3600 };
+const NOON = 12 * 3600;
+// The arc both cross on, left to right: `low` is below the hill at either end,
+// `top` its height halfway, drawn as `steps` straight pieces.
+const ARC = { edge: 30, top: 26, low: HEIGHT, steps: 24 };
 
 export const daytimeFor = (hour) =>
   DAYTIMES.findLast((daytime) => hour >= daytime.from) ?? DAYTIMES[DAYTIMES.length - 1];
@@ -471,11 +482,13 @@ async function sceneFor($, bodyColumns) {
     return lately.source;
   }
   const rainbowAge = (now - rainbowAt) / 1000;
+  const clock = new Date(now);
   // startAt and rainbowAge pick up where the image before had got, so the play
   // goes on and only what changed seems to change.
   const sky = {
     weather,
     daytime,
+    secondOfDay: clock.getHours() * 3600 + clock.getMinutes() * 60 + clock.getSeconds(),
     startAt: Math.max(0, now - startedAt) / 1000,
     rainbowAge: rainbowAt && rainbowAge < RAINBOW_SECONDS ? rainbowAge : undefined,
     thought,
@@ -842,19 +855,39 @@ function tinted(color, { tint, amount }, share) {
   return `#${mixed.map((value) => value.toString(16).padStart(2, "0")).join("")}`;
 }
 
-function sun(x, y, paint) {
+function sun(paint) {
   return (
-    `<g transform="translate(${x} ${y})"><circle r="18" fill="${paint("#ffe9a3", 0.8)}" opacity=".5"><animate attributeName="r" values="17;21;17" dur="5s" repeatCount="indefinite"/></circle>` +
+    `<circle r="18" fill="${paint("#ffe9a3", 0.8)}" opacity=".5"><animate attributeName="r" values="17;21;17" dur="5s" repeatCount="indefinite"/></circle>` +
     `<g stroke="${paint("#ffcf5c", 0.8)}" stroke-width="2" stroke-linecap="round"><animateTransform attributeName="transform" type="rotate" values="0;360" dur="30s" repeatCount="indefinite"/>` +
     `<path d="M0 -17V-22M0 17V22M-17 0H-22M17 0H22M-12 -12L-16 -16M12 12L16 16M-12 12L-16 16M12 -12L16 -16"/></g>` +
-    `<circle r="12" fill="${paint("#ffd95e", 0.8)}"/></g>`
+    `<circle r="12" fill="${paint("#ffd95e", 0.8)}"/>`
   );
 }
 
-function moon(x, y) {
+function moon() {
   return (
-    `<g transform="translate(${x} ${y})"><circle r="17" fill="#fff4c2" opacity=".14"/>` +
-    `<path d="M2 -12A12 12 0 1 0 12 3A9.5 9.5 0 0 1 2 -12Z" fill="#fff4c2"/></g>`
+    `<circle r="17" fill="#fff4c2" opacity=".14"/>` +
+    `<path d="M2 -12A12 12 0 1 0 12 3A9.5 9.5 0 0 1 2 -12Z" fill="#fff4c2"/>`
+  );
+}
+
+// `share` of the way across the arc, as an SVG point.
+function arcPoint(width, share) {
+  const x = ARC.edge + (width - 2 * ARC.edge) * share;
+  const y = ARC.top + (ARC.low - ARC.top) * (2 * share - 1) ** 2;
+  return `${Math.round(x)} ${Math.round(y)}`;
+}
+
+// The sun or the moon, carried along the arc by the image itself from where the
+// hour has brought it, so it moves with no redraw. Out of its hours it waits
+// where it set.
+function crossing(body, width, secondOfDay, face) {
+  const since = Math.min((((secondOfDay - body.rises) % DAY) + DAY) % DAY, body.up);
+  const path = Array.from({ length: ARC.steps + 1 }, (_, i) => arcPoint(width, i / ARC.steps));
+  return (
+    `<g id="${body.id}" transform="translate(${arcPoint(width, since / body.up)})">` +
+    `<animateTransform attributeName="transform" type="translate" values="${path.join(";")}" dur="${body.up}s" begin="-${since.toFixed(0)}s" fill="freeze"/>` +
+    `${face}</g>`
   );
 }
 
@@ -920,10 +953,10 @@ function rain(rng, width, { gap, slant, dur }) {
   return layer(gap * 1.4, 5, 25, +(dur * 1.4).toFixed(2), 0.45) + layer(gap, 8, 28, dur, 0.75);
 }
 
-function backdrop(rng, width, { weather, daytime, rainbowAge, startAt = 0 }) {
+function backdrop(rng, width, { weather, daytime, rainbowAge, startAt = 0, secondOfDay = NOON }) {
   const paint = (color, share = 1) => tinted(color, daytime, share);
   const ground = (color) => paint(color, 0.75);
-  const isNight = daytime.sunY === undefined;
+  const isNight = daytime.isNight === true;
   const tufts = [];
   for (let x = 16; x < width - 8; x += 26 + rng() * 44) {
     const y = GROUND + 1 + rng() * 8;
@@ -942,7 +975,7 @@ function backdrop(rng, width, { weather, daytime, rainbowAge, startAt = 0 }) {
     `<defs><linearGradient id="sky" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="${paint(weather.sky[0])}"/><stop offset="1" stop-color="${paint(weather.sky[1])}"/></linearGradient></defs>` +
     `<rect width="${width}" height="${HEIGHT}" rx="12" fill="url(#sky)"/>` +
     (isNight && weather.stars ? stars(rng, width, weather.stars) : "") +
-    (weather.hasSun ? (isNight ? moon(width - 70, 28) : sun(width - 70, daytime.sunY, paint)) : "") +
+    (weather.hasSun ? (isNight ? crossing(MOON, width, secondOfDay, moon()) : crossing(SUN, width, secondOfDay, sun(paint))) : "") +
     (weather.hasSwirl ? swirl(width / 2, 30) : "") +
     (rainbowAge === undefined ? "" : rainbow(width * 0.35, rainbowAge, paint)) +
     weather.clouds.map((args) => cloud(...args)).join("") +
