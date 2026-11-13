@@ -1,0 +1,6 @@
+{
+  "name": "chiikawa-friends",
+  "owner": { "name": "stlim1025" },
+  "description": "Chiikawa and five friends play in a little meadow above the prompt of the Claude Code desktop app.",
+  "plugins": [{ "name": "chiikawa-friends", "source": "./" }]
+}
