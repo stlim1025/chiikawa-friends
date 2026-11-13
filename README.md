@@ -25,6 +25,21 @@ claude plugin install chiikawa-friends --marketplace stlim1025/chiikawa-friends
 
 데스크톱 앱에서는 `/plugin` 이 동작하지 않습니다. 입력창 옆 **+** → **Plugins** → **Add marketplace** 에 `stlim1025/chiikawa-friends` 를 넣은 뒤 **Add plugin** 을 누릅니다.
 
+## 업데이트
+
+새 버전이 올라와도 이미 설치한 PC 에는 저절로 들어가지 않습니다. 이 저장소 같은 제3자 마켓플레이스는 자동 업데이트가 기본으로 꺼져 있기 때문입니다.
+
+셸에서 마켓플레이스 목록을 새로 받은 뒤 mod 를 올립니다:
+
+```bash
+claude plugin marketplace update chiikawa-friends
+claude plugin update chiikawa-friends@chiikawa-friends
+```
+
+그다음 데스크톱 앱을 다시 시작하면 새 버전이 보입니다.
+
+앞으로 자동으로 받으려면, 터미널에서 연 세션에서 `/plugin` → **Marketplaces** 탭 → `chiikawa-friends` → **Enable auto-update** 를 고릅니다. 그 뒤로는 세션이 시작될 때 새 버전을 받아 두고, 다음 세션부터 적용됩니다.
+
 ## 알아 둘 점
 
 - 풀밭은 **데스크톱 앱에서만** 그려집니다. 터미널에는 그림(Svg)을 그릴 수 없어서 아무것도 보이지 않습니다.
